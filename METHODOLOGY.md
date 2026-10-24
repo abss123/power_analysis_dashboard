@@ -22,12 +22,25 @@ miss it, even if the effect is real. Bigger groups give smaller MDEs.
 
 ## The formula
 
-    MDE = M × SD × √(sum of 1/n over the groups being compared)
+The app assumes each comparison is analysed with a **two-sided t-test**:
 
-- **M** = 1.96 + 0.84 ≈ 2.80 at 95% significance and 80% power. Stricter settings give a larger M.
+    MDE = (t_{1−α/2, df} + t_{power, df}) × SD × √(sum of c_j² / n_j)
+
+- **t_{1−α/2, df} + t_{power, df}** (the multiplier M) ≈ 1.983 + 0.845 ≈ 2.83 at
+  95% significance, 80% power and df = 104. Stricter settings give a larger M.
+- **df** (degrees of freedom) = participants − groups: 106 − 2 = 104 for the 2-way
+  design, and 106 − 4 = 102 for every 4-way comparison, because the analysis pools
+  the spread of answers across all groups in the design.
+  *Why t and not the normal curve?* With small groups the t-distribution's wider
+  tails give a more honest, slightly larger MDE. With thousands of people the two agree.
 - **SD** is the standard deviation: how spread out answers are. For a yes/no
-  question with rate p, SD = √(p × (1 − p)). At 30%, SD ≈ 0.46.
-- **n** is the number of people in each group.
+  question with rate p, SD = √(p × (1 − p)). At 30%, SD ≈ 0.46. Yes/no questions
+  use the same t formula, which is slightly conservative compared with a two-proportion z-test.
+- **n_j** is the number of people in group j, and **c_j** is the weight that
+  group gets in the comparison (+1 or −1 for a simple difference, ±½ for a main
+  effect). The table below writes out the sum for each comparison.
+- If there are fewer people than groups plus one (df < 1), no MDE can be
+  computed and the app shows "Not achievable".
 
 The app shows each MDE three ways: in the question's own units (points, or
 percentage points for yes/no questions), in SDs, and as a % of the average.
@@ -75,11 +88,11 @@ Assuming no treatment has a real effect, with k tests each at false-positive rat
 so each test uses 98.3% significance). This keeps the chance of *any* false
 positive across the whole experiment at about 5%. The price: each test needs
 stronger evidence, so **every MDE gets larger** (e.g. 2-way with SD 1.5 goes
-from 0.82 to 0.94 points with 3 tests).
+from 0.82 to 0.96 points with 3 tests).
 
 ## Assumptions
 
-- **Normal approximation (z-test).** Reasonable for groups of a few dozen or more.
+- **Two-sided t-test** with degrees of freedom = participants − groups. Yes/no questions use the same t-test, which is slightly conservative.
 - **Equal variance.** Every group has the same spread of answers.
 - **Binary SD at the baseline rate.** Slightly optimistic if the treatment moves the rate towards 50%.
 - **No attrition.** Everyone we pay gives usable answers. If you expect dropouts, lower the budget accordingly.

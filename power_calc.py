@@ -5,9 +5,14 @@ Method
 The budget fixes how many participants we can pay. They are split as evenly as
 possible into groups. For each outcome question, the MDE is the smallest true
 difference between groups that we would detect with the chosen power, using a
-two-sided test at the per-test significance level (1 - per-test alpha):
+two-sided t-test at the per-test alpha:
 
-    MDE = (z_{1 - alpha/2} + z_{power}) * SD * sqrt(sum of 1/n over the groups involved)
+    MDE = (t_{1 - alpha/2, df} + t_{power, df}) * SD * sqrt(sum of c_j^2 / n_j over the groups)
+
+with df = participants - groups, because the analysis pools the variance across
+every group in the design. This swaps the usual z quantiles for t quantiles, a
+standard approximation that matches the exact noncentral-t calculation to within
+about 0.001 SD at these sample sizes.
 
 Each comparison (2-way, main effect, single variant vs control, interaction)
 differs only in which groups enter that square root, and with what weight.
@@ -15,10 +20,11 @@ With the optional Bonferroni correction, alpha is divided by the number of tests
 
 Assumptions
 -----------
-- Normal approximation (z-test), even for small groups and binary outcomes.
+- Two-sided t-test with df = participants - groups.
 - All groups share the same standard deviation (equal variance).
-- For binary outcomes the SD is sqrt(p * (1 - p)) at the baseline rate p. This is
-  slightly optimistic when the true effect moves p towards 0.5.
+- Binary outcomes use the same t formula with SD = sqrt(p * (1 - p)) at the baseline
+  rate p: slightly optimistic if the effect moves p towards 0.5, and slightly
+  conservative compared with a two-proportion z-test.
 - No attrition: everyone we pay provides usable data.
 - Multiple tests are uncorrected unless Bonferroni is switched on.
 - False-positive probabilities treat tests as independent (outcomes from the same
@@ -27,7 +33,8 @@ Assumptions
 """
 
 import math
-from statistics import NormalDist
+
+from scipy.stats import t as t_distribution
 
 
 def cost_per_person(rate_per_hour, minutes_per_person):
@@ -49,6 +56,12 @@ def split_into_groups(n_total, n_groups):
     return [base_size + 1 if index < leftover else base_size for index in range(n_groups)]
 
 
+def degrees_of_freedom(n_total, n_groups):
+    """Degrees of freedom for a t-test that pools variance across all groups."""
+    # df = N - number of groups   (e.g. 106 - 2 = 104, 106 - 4 = 102)
+    return n_total - n_groups
+
+
 def sd_for_binary(rate):
     """Standard deviation of a yes/no outcome with the given rate."""
     # SD = sqrt(p * (1 - p))
@@ -62,41 +75,46 @@ def per_test_alpha(significance, total_tests, bonferroni):
     return alpha / total_tests if bonferroni else alpha
 
 
-def multiplier(significance, power):
-    """Number of standard errors the true effect must be: z(1 - alpha/2) + z(power).
-
-    `significance` is the per-test level, i.e. 1 - per_test_alpha(...).
-    """
-    # M = z_{1 - alpha/2} + z_{power}, alpha = 1 - significance (two-sided)
-    alpha = 1 - significance
-    standard_normal = NormalDist()
-    return standard_normal.inv_cdf(1 - alpha / 2) + standard_normal.inv_cdf(power)
+def multiplier(alpha, power, df):
+    """Number of standard errors the true effect must be (None if df < 1)."""
+    # M = t_{1 - alpha/2, df} + t_{power, df}   (two-sided)
+    if df < 1:
+        return None
+    return t_distribution.ppf(1 - alpha / 2, df) + t_distribution.ppf(power, df)
 
 
-def mde_two_way(sd, n_control, n_variant, significance, power):
+def _mde(sd, sum_of_weighted_inverses, alpha, power, df):
+    """Shared step for every comparison: MDE = M * SD * sqrt(sum c_j^2 / n_j). None if df < 1."""
+    standard_errors_needed = multiplier(alpha, power, df)
+    if standard_errors_needed is None:
+        return None
+    return standard_errors_needed * sd * math.sqrt(sum_of_weighted_inverses)
+
+
+def mde_two_way(sd, n_control, n_variant, alpha, power, df):
     """MDE for control vs one variant."""
     # MDE = M * SD * sqrt(1/n_c + 1/n_v)
-    return multiplier(significance, power) * sd * math.sqrt(1 / n_control + 1 / n_variant)
+    return _mde(sd, 1 / n_control + 1 / n_variant, alpha, power, df)
 
 
-def mde_main_effect(sd, n_control, n_variant1, n_variant2, n_variant3, significance, power):
+def mde_main_effect(sd, n_control, n_variant1, n_variant2, n_variant3, alpha, power, df):
     """MDE for one treatment's effect, averaged over whether the other treatment is present."""
     # MDE = M * SD * sqrt((1/n_c + 1/n_v1 + 1/n_v2 + 1/n_v3) / 4)
     sum_of_inverses = 1 / n_control + 1 / n_variant1 + 1 / n_variant2 + 1 / n_variant3
-    return multiplier(significance, power) * sd * math.sqrt(sum_of_inverses / 4)
+    return _mde(sd, sum_of_inverses / 4, alpha, power, df)
 
 
-def mde_single_variant_vs_control(sd, n_control, n_variant, significance, power):
+def mde_single_variant_vs_control(sd, n_control, n_variant, alpha, power, df):
     """MDE for comparing one cell of the 2x2 directly against control."""
     # MDE = M * SD * sqrt(1/n_c + 1/n_v)
-    return multiplier(significance, power) * sd * math.sqrt(1 / n_control + 1 / n_variant)
+    return _mde(sd, 1 / n_control + 1 / n_variant, alpha, power, df)
 
 
-def mde_interaction(sd, n_control, n_variant1, n_variant2, n_variant3, significance, power):
+def mde_interaction(sd, n_control, n_variant1, n_variant2, n_variant3, alpha, power, df):
     """MDE for the interaction: does doing both treatments add more than the sum of each alone?"""
     # MDE = M * SD * sqrt(1/n_c + 1/n_v1 + 1/n_v2 + 1/n_v3)
     sum_of_inverses = 1 / n_control + 1 / n_variant1 + 1 / n_variant2 + 1 / n_variant3
-    return multiplier(significance, power) * sd * math.sqrt(sum_of_inverses)
+    return _mde(sd, sum_of_inverses, alpha, power, df)
 
 
 def binary_mde_achievable(mde, rate):

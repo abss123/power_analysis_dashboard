@@ -26,7 +26,8 @@ st.title("Minimum detectable effect calculator")
 with st.expander("How to read this"):
     st.markdown(
         "The **minimum detectable effect (MDE)** is the smallest true difference between groups "
-        "that this experiment would reliably pick up (with the chosen power and significance); "
+        "that this experiment would reliably pick up with a two-sided t-test "
+        "(at the chosen power and significance); "
         "if the effect you expect is smaller, the experiment is likely to miss it. "
         "Your budget sets how many people we can pay, and smaller groups mean larger MDEs. "
         "The more tests you run, the more likely at least one looks significant purely by chance; "
@@ -92,7 +93,14 @@ def format_detail(mde, sd, mean):
 
 
 def is_achievable(mde, mean, outcome_type):
+    """False if there are too few people to estimate it (None) or a binary rate can't move that far."""
+    if mde is None:
+        return False
     return outcome_type != "Binary" or pc.binary_mde_achievable(mde, mean)
+
+
+def not_achievable_text(mde, outcome_type):
+    return "Not achievable" if mde is None else f"{format_raw(mde, outcome_type)} (not achievable)"
 
 
 # ---------------------------------------------------------------- input helpers
@@ -187,7 +195,7 @@ def question_card(prefix, q, groups_text, compute_mdes, copy_from=None, copy_mis
                     st.metric(label, format_raw(mde, outcome_type))
                     st.caption(format_detail(mde, sd, mean))
                 else:
-                    st.error(f"{label}: {format_raw(mde, outcome_type)} (not achievable)")
+                    st.error(f"{label}: {not_achievable_text(mde, outcome_type)}")
             st.markdown(f"**Group sizes:** {groups_text}")
         return inputs, mdes
 
@@ -212,8 +220,10 @@ def key_results(panel, groups_text, results, alpha, total_tests):
             outcome_type, mean, sd = inputs
             for label, mde in mdes:
                 tile_label = f"Q{q}" if len(mdes) == 1 else f"Q{q} · {label}"
-                tiles.append((tile_label, format_key(mde, sd, outcome_type),
-                              is_achievable(mde, mean, outcome_type)))
+                if is_achievable(mde, mean, outcome_type):
+                    tiles.append((tile_label, format_key(mde, sd, outcome_type), True))
+                else:
+                    tiles.append((tile_label, not_achievable_text(mde, outcome_type), False))
         per_row = 3
         for start in range(0, len(tiles), per_row):
             row = st.columns(per_row)
@@ -223,7 +233,7 @@ def key_results(panel, groups_text, results, alpha, total_tests):
                 elif achievable:
                     col.metric(label, value)
                 else:
-                    col.error(f"**{label}**  \n{value} (not achievable)")
+                    col.error(f"**{label}**  \n{value}")
 
 
 def false_positive_panel(significance, alpha, total_tests, bonferroni):
@@ -264,10 +274,11 @@ def two_way_tab():
     significance, power, n_questions = basic_settings("two")
     alpha, total_tests, bonferroni = testing_settings("two", significance, n_questions, 1)
     n_control, n_variant = pc.split_into_groups(n_total, 2)
+    df = pc.degrees_of_freedom(n_total, 2)
     groups_text = f"{n_control} / {n_variant}"
 
     def compute_mdes(sd):
-        return [("MDE", pc.mde_two_way(sd, n_control, n_variant, 1 - alpha, power))]
+        return [("MDE", pc.mde_two_way(sd, n_control, n_variant, alpha, power, df))]
 
     panel = st.container(border=True)
     results, inputs_by_question = [], {}
@@ -296,7 +307,8 @@ def four_way_tab(two_way_inputs):
     n_c, n_v1, n_v2, n_v3 = pc.split_into_groups(n_total, 4)
     n_smallest_variant = min(n_v1, n_v2, n_v3)
     groups_text = f"{n_c} / {n_v1} / {n_v2} / {n_v3}"
-    test_significance = 1 - alpha
+    # Every 4-way comparison pools variance across all four groups.
+    df = pc.degrees_of_freedom(n_total, 4)
 
     def compute_mdes(sd):
         mdes = []
@@ -304,13 +316,13 @@ def four_way_tab(two_way_inputs):
             # Balanced design: A and B have the same MDE, so show it once.
             label = "Main effects" if {MAIN_A, MAIN_B} <= set(selected) else (
                 "Main effect A" if MAIN_A in selected else "Main effect B")
-            mdes.append((label, pc.mde_main_effect(sd, n_c, n_v1, n_v2, n_v3, test_significance, power)))
+            mdes.append((label, pc.mde_main_effect(sd, n_c, n_v1, n_v2, n_v3, alpha, power, df)))
         if INTERACTION in selected:
-            mdes.append(("Interaction", pc.mde_interaction(sd, n_c, n_v1, n_v2, n_v3, test_significance, power)))
+            mdes.append(("Interaction", pc.mde_interaction(sd, n_c, n_v1, n_v2, n_v3, alpha, power, df)))
         if VS_CONTROL in selected:
             # Smallest variant group gives the largest (most cautious) of the three MDEs.
             mdes.append(("Variant vs control", pc.mde_single_variant_vs_control(
-                sd, n_c, n_smallest_variant, test_significance, power)))
+                sd, n_c, n_smallest_variant, alpha, power, df)))
         return mdes
 
     panel = st.container(border=True)
