@@ -52,3 +52,44 @@ def test_binary_rate_0_30():
 def test_share_of_mean():
     assert pc.share_of_mean(0.249, 0.30) == pytest.approx(0.83, abs=0.001)
     assert pc.share_of_mean(1.0, 0) is None
+
+
+# --- False positives and Bonferroni ---
+
+def test_false_positives_3_tests():
+    assert pc.prob_no_false_positive(0.05, 3) == pytest.approx(0.857375, abs=1e-9)
+    assert pc.prob_at_least_one_false_positive(0.05, 3) == pytest.approx(0.142625, abs=1e-9)
+    assert pc.prob_all_false_positives(0.05, 3) == pytest.approx(0.000125, abs=1e-12)
+
+
+def test_false_positives_6_tests():
+    assert pc.prob_at_least_one_false_positive(0.05, 6) == pytest.approx(0.264908, abs=1e-6)
+
+
+def test_per_test_alpha():
+    assert pc.per_test_alpha(SIG, 3, bonferroni=False) == pytest.approx(0.05)
+    assert pc.per_test_alpha(SIG, 3, bonferroni=True) == pytest.approx(0.05 / 3)
+
+
+def test_bonferroni_false_positives():
+    alpha_3 = pc.per_test_alpha(SIG, 3, bonferroni=True)
+    alpha_6 = pc.per_test_alpha(SIG, 6, bonferroni=True)
+    assert pc.prob_at_least_one_false_positive(alpha_3, 3) == pytest.approx(0.049171, abs=1e-6)
+    assert pc.prob_at_least_one_false_positive(alpha_6, 6) == pytest.approx(0.04897, abs=1e-5)
+
+
+def test_bonferroni_mdes_sd_1_5():
+    sig_3 = 1 - pc.per_test_alpha(SIG, 3, bonferroni=True)
+    sig_6 = 1 - pc.per_test_alpha(SIG, 6, bonferroni=True)
+    assert pc.mde_two_way(1.5, CONTROL, VARIANT, sig_3, POWER) == pytest.approx(0.943, abs=0.001)
+    assert pc.mde_main_effect(1.5, C, V1, V2, V3, sig_6, POWER) == pytest.approx(1.014, abs=0.001)
+
+
+def test_toggle_off_leaves_mdes_unchanged():
+    sig_off = 1 - pc.per_test_alpha(SIG, 6, bonferroni=False)
+    assert pc.mde_two_way(1.5, CONTROL, VARIANT, sig_off, POWER) == pc.mde_two_way(1.5, CONTROL, VARIANT, SIG, POWER)
+
+
+def test_binary_mde_achievable():
+    assert pc.binary_mde_achievable(0.499, 0.30)
+    assert not pc.binary_mde_achievable(0.75, 0.30)

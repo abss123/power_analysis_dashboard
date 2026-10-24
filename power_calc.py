@@ -1,16 +1,17 @@
-"""Minimum detectable effect (MDE) calculations for a budget-constrained experiment.
+"""Minimum detectable effect (MDE) and false-positive calculations for a budget-constrained experiment.
 
 Method
 ------
 The budget fixes how many participants we can pay. They are split as evenly as
 possible into groups. For each outcome question, the MDE is the smallest true
 difference between groups that we would detect with the chosen power, using a
-two-sided test at the chosen significance level:
+two-sided test at the per-test significance level (1 - per-test alpha):
 
     MDE = (z_{1 - alpha/2} + z_{power}) * SD * sqrt(sum of 1/n over the groups involved)
 
 Each comparison (2-way, main effect, single variant vs control, interaction)
 differs only in which groups enter that square root, and with what weight.
+With the optional Bonferroni correction, alpha is divided by the number of tests.
 
 Assumptions
 -----------
@@ -19,7 +20,9 @@ Assumptions
 - For binary outcomes the SD is sqrt(p * (1 - p)) at the baseline rate p. This is
   slightly optimistic when the true effect moves p towards 0.5.
 - No attrition: everyone we pay provides usable data.
-- One test per question; no multiple-comparison correction.
+- Multiple tests are uncorrected unless Bonferroni is switched on.
+- False-positive probabilities treat tests as independent (outcomes from the same
+  people are usually correlated, so these are approximate).
 - The main-effect MDE assumes the two treatments do not interact.
 """
 
@@ -52,8 +55,18 @@ def sd_for_binary(rate):
     return math.sqrt(rate * (1 - rate))
 
 
+def per_test_alpha(significance, total_tests, bonferroni):
+    """False-positive rate allowed for each individual test."""
+    # alpha = 1 - significance;  with Bonferroni: alpha / k
+    alpha = 1 - significance
+    return alpha / total_tests if bonferroni else alpha
+
+
 def multiplier(significance, power):
-    """Number of standard errors the true effect must be: z(1 - alpha/2) + z(power)."""
+    """Number of standard errors the true effect must be: z(1 - alpha/2) + z(power).
+
+    `significance` is the per-test level, i.e. 1 - per_test_alpha(...).
+    """
     # M = z_{1 - alpha/2} + z_{power}, alpha = 1 - significance (two-sided)
     alpha = 1 - significance
     standard_normal = NormalDist()
@@ -86,6 +99,12 @@ def mde_interaction(sd, n_control, n_variant1, n_variant2, n_variant3, significa
     return multiplier(significance, power) * sd * math.sqrt(sum_of_inverses)
 
 
+def binary_mde_achievable(mde, rate):
+    """Can a rate move by `mde` in at least one direction without leaving 0..1?"""
+    # achievable if MDE <= max(p, 1 - p)
+    return mde <= max(rate, 1 - rate)
+
+
 def in_sd_units(mde, sd):
     """MDE expressed as a fraction of a standard deviation (an effect size)."""
     # d = MDE / SD
@@ -96,3 +115,23 @@ def share_of_mean(mde, mean):
     """MDE as a fraction of the average (None if the average is zero)."""
     # share = MDE / |mean|
     return mde / abs(mean) if mean else None
+
+
+# --- False positives, assuming no treatment has a real effect and k independent tests ---
+
+def prob_no_false_positive(alpha, total_tests):
+    """Chance that none of the tests is significant by luck."""
+    # P(none) = (1 - alpha)^k
+    return (1 - alpha) ** total_tests
+
+
+def prob_at_least_one_false_positive(alpha, total_tests):
+    """Chance that one or more tests is significant by luck."""
+    # P(at least one) = 1 - (1 - alpha)^k
+    return 1 - (1 - alpha) ** total_tests
+
+
+def prob_all_false_positives(alpha, total_tests):
+    """Chance that every test is significant by luck."""
+    # P(all) = alpha^k
+    return alpha ** total_tests
